@@ -7,8 +7,11 @@
 
 static PluginMenu   menu;
 static Handle       thread;
-static Handle       onProcessExitEvent, resumeExitEvent;
+static Handle       memLayoutChanged;
 static u8           stack[STACK_SIZE] ALIGN(8);
+
+s32     PLGLDR__FetchEvent(void);
+void    PLGLDR__Reply(s32 event);
 
 void     Flash(u32 color)
 {
@@ -71,33 +74,51 @@ void    ThreadMain(void *arg)
     // Init our menu
     InitMenu();
 
-    // Plugin main loop
-    while (1)
+    while (true)
     {
-        if (svcWaitSynchronization(onProcessExitEvent, 1000000) != 0x09401BFE)
+        if (svcWaitSynchronization(memLayoutChanged, 10000000ULL) == 0x09401BFE) // 0.01s
         {
-            // If we didn't timeout, then the process is exiting
-            goto exit;
+            s32 event = PLGLDR__FetchEvent();
+
+            if (event == PLG_SLEEP_ENTRY)
+            {
+                // Add code to handle sleep mode here.
+
+                PLGLDR__Reply(event);
+            }
+            else if (event == PLG_SLEEP_EXIT)
+            {
+                // Add code to handle waking from sleep here.
+
+                PLGLDR__Reply(event);
+            }
+            else if (event == PLG_ABOUT_TO_SWAP)
+            {
+                // Add code to save state and get ready for dumping memory to SD.
+
+                // Reply and wait for resuming
+                PLGLDR__Reply(event);
+
+                // Add code to restore state saved previously.
+            }
+            else if (event == PLG_ABOUT_TO_EXIT)
+            {
+                // Add code here to handle exiting the plugin
+
+                // This function do not return and exit the thread
+                PLGLDR__Reply(event);
+            }
+
+            // Check keys, display the menu if necessary
+            if (HID_PAD & BUTTON_SELECT)
+                PLGLDR__DisplayMenu(&menu);
+
+            // Apply enabled cheat
+            ApplyCheat();
+
+            continue;
         }
-
-        // Check keys, display the menu if necessary
-        if (HID_PAD & BUTTON_SELECT)
-            PLGLDR__DisplayMenu(&menu);
-
-        // Apply enabled cheat
-        ApplyCheat();
     }
-
-exit:
-    // This is executed when the game is about to exit
-    // useful to save config, properly deinit stuff etc
-    plgLdrExit();
-    srvExit();
-
-    // We're done with our exit code, so we let the game exit
-    svcSignalEvent(resumeExitEvent);
-
-    svcExitThread();
 }
 
 extern char* fake_heap_start;
@@ -133,8 +154,8 @@ void    main(void)
     srvInit();
     plgLdrInit();
 
-    // Get the event triggered  when the game will exit
-    svcControlProcess(CUR_PROCESS_HANDLE, PROCESSOP_GET_ON_EXIT_EVENT, (u32)&onProcessExitEvent, (u32)&resumeExitEvent);
+    // Get memory layout changed event
+    svcControlProcess(CUR_PROCESS_HANDLE, PROCESSOP_GET_ON_MEMORY_CHANGE_EVENT, (u32)&memLayoutChanged, 0);
 
     // Create the plugin's main thread
     svcCreateThread(&thread, ThreadMain, 0, (u32 *)(stack + STACK_SIZE), 30, -1);

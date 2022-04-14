@@ -8,29 +8,29 @@ TOPDIR 		?= 	$(CURDIR)
 include $(DEVKITARM)/3ds_rules
 
 TARGET		:= 	$(notdir $(CURDIR))
-PLGINFO		:= 	$(notdir $(TOPDIR)).plgInfo
+PLGINFO 	:= 	Luma3DS-Plugin-sample.plgInfo
+
 BUILD		:= 	build
 INCLUDES	:= 	includes
-LIBDIRS		:= 	$(CTRULIB)
 SOURCES 	:= 	sources
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
-ARCH		:=	-march=armv6k -mlittle-endian -mtune=mpcore -mfloat-abi=hard 
+ARCH		:=	-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 
-CFLAGS		:=	-Os -mword-relocations \
-				-fomit-frame-pointer -ffunction-sections -fno-strict-aliasing \
-				$(ARCH)
+CFLAGS		:=	$(ARCH) -Os -mword-relocations \
+				-fomit-frame-pointer -ffunction-sections -fno-strict-aliasing
 
-CFLAGS		+=	$(INCLUDE) -DARM11 -D_3DS 
+CFLAGS		+=	$(INCLUDE) -D__3DS__
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
-ASFLAGS		:= $(ARCH)
-LDFLAGS		:= -T $(TOPDIR)/3ds.ld $(ARCH) -Os -Wl,-Map,$(notdir $*.map),--gc-sections 
+ASFLAGS		:=	$(ARCH)
+LDFLAGS		:= -T $(TOPDIR)/3gx.ld $(ARCH) -Os -Wl,--gc-sections,--strip-discarded,--strip-debug
 
 LIBS		:= -lctru
+LIBDIRS		:= 	$(CTRULIB) $(PORTLIBS)
 
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional
@@ -49,7 +49,6 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 CFILES			:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES			:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-#	BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
 export LD 		:= 	$(CXX)
 export OFILES	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
@@ -71,7 +70,7 @@ $(BUILD):
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ... 
-	@-rm -fr $(BUILD) $(OUTPUT).3gx
+	@rm -fr $(BUILD) $(OUTPUT).3gx $(OUTPUT).elf
 
 re: clean all
 
@@ -85,6 +84,7 @@ DEPENDS	:=	$(OFILES:.o=.d)
 # main targets
 #---------------------------------------------------------------------------------
 $(OUTPUT).3gx : $(OFILES)
+
 #---------------------------------------------------------------------------------
 # you need a rule like this for each extension you use as binary data
 #---------------------------------------------------------------------------------
@@ -94,14 +94,13 @@ $(OUTPUT).3gx : $(OFILES)
 	@$(bin2o)
 
 #---------------------------------------------------------------------------------
+.PRECIOUS: %.elf
 %.3gx: %.elf
+#---------------------------------------------------------------------------------
 	@echo creating $(notdir $@)
-	@$(OBJCOPY) -O binary $(OUTPUT).elf $(TOPDIR)/objdump -S
-	@3gxtool.exe -s $(TOPDIR)/objdump $(TOPDIR)/$(PLGINFO) $@
-	@- rm $(TOPDIR)/objdump
-
+	@3gxtool -s $(word 1, $^) $(TOPDIR)/$(PLGINFO) $@
 
 -include $(DEPENDS)
 
-#---------------------------------------------------------------------------------------
+#---------------------------------------------------------------------------------
 endif

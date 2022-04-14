@@ -82,6 +82,19 @@ SVC_BEGIN svcControlMemoryEx
     bx   lr
 SVC_END
 
+SVC_BEGIN svcControlMemoryUnsafe
+    str r4, [sp, #-4]!
+    ldr r4, [sp, #4]
+    svc 0xA3
+    ldr r4, [sp], #4
+    bx lr
+SVC_END
+
+SVC_BEGIN svcFreeMemory
+    svc  0xA3
+    bx   lr
+SVC_END
+
 SVC_BEGIN svcControlService
     svc 0xB0
     bx lr

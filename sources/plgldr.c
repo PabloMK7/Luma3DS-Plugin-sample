@@ -1,19 +1,51 @@
 #include <3ds.h>
 #include "plgldr.h"
 #include <string.h>
+#include "csvc.h"
 
 static Handle   plgLdrHandle;
+static Handle   plgLdrArbiter;
+static s32*     plgEvent;
+static s32*     plgReply;
 static int      plgLdrRefCount;
+static bool     isN3DS;
+static OnPlgLdrEventCb_t    onPlgLdrEventCb = NULL;
 
-Result  plgLdrInit(void)
+static Result   PLGLDR__GetArbiter(void)
 {
     Result res = 0;
 
+    u32 *cmdbuf = getThreadCommandBuffer();
+
+    cmdbuf[0] = IPC_MakeHeader(9, 0, 0);
+    if (R_SUCCEEDED((res = svcSendSyncRequest(plgLdrHandle))))
+    {
+        res = cmdbuf[1];
+        plgLdrArbiter = cmdbuf[3];
+    }
+    return res;
+}
+
+Result  plgLdrInit(void)
+{
+    s64    out = 0;
+    Result res = 0;
+
+    svcGetSystemInfo(&out, 0x10000, 0x201);
+    isN3DS = out != 0;
     if (AtomicPostIncrement(&plgLdrRefCount) == 0)
         res = svcConnectToPort(&plgLdrHandle, "plg:ldr");
 
-    if (R_FAILED(res))
-        AtomicDecrement(&plgLdrRefCount);
+    if (R_SUCCEEDED(res)
+       && R_SUCCEEDED((res = PLGLDR__GetArbiter())))
+    {
+        PluginHeader *header = (PluginHeader *)0x07000000;
+
+        plgEvent = header->plgldrEvent;
+        plgReply = header->plgldrReply;
+    }
+    else
+        plgLdrExit();
 
     return res;
 }
@@ -23,7 +55,11 @@ void    plgLdrExit(void)
     if (AtomicDecrement(&plgLdrRefCount))
         return;
 
-    svcCloseHandle(plgLdrHandle);
+    if (plgLdrHandle)
+        svcCloseHandle(plgLdrHandle);
+    if (plgLdrArbiter)
+        svcCloseHandle(plgLdrArbiter);
+    plgLdrHandle = plgLdrArbiter = 0;
 }
 
 Result  PLGLDR__IsPluginLoaderEnabled(bool *isEnabled)
@@ -77,7 +113,7 @@ Result  PLGLDR__SetPluginLoadParameters(PluginLoadParameters *parameters)
     }
     return res;
 }
-
+void     Flash(u32 color);
 Result  PLGLDR__DisplayMenu(PluginMenu *menu)
 {
     Result res = 0;
@@ -100,6 +136,8 @@ Result  PLGLDR__DisplayMenu(PluginMenu *menu)
     {
         res = cmdbuf[1];
     }
+    else Flash(0xFF0000);
+
     return res;
 }
 
@@ -140,4 +178,148 @@ Result  PLGLDR__DisplayErrMessage(const char *title, const char *body, u32 error
         res = cmdbuf[1];
     }
     return res;
+}
+
+Result  PLGLDR__GetVersion(u32 *version)
+{
+    Result res = 0;
+
+    u32 *cmdbuf = getThreadCommandBuffer();
+
+    cmdbuf[0] = IPC_MakeHeader(8, 0, 0);
+
+    if (R_SUCCEEDED((res = svcSendSyncRequest(plgLdrHandle))))
+    {
+        if (cmdbuf[0] != IPC_MakeHeader(8, 2, 0))
+            return 0xD900182F;
+
+        res = cmdbuf[1];
+        if (version)
+            *version = cmdbuf[2];
+    }
+    return res;
+}
+
+Result  PLGLDR__GetPluginPath(char *path)
+{
+    if (path == NULL)
+        return MAKERESULT(28, 7, 254, 1014); ///< Usage, App, Invalid argument
+
+    Result res = 0;
+
+    u32 *cmdbuf = getThreadCommandBuffer();
+
+    cmdbuf[0] = IPC_MakeHeader(10, 0, 2);
+    cmdbuf[1] = IPC_Desc_Buffer(255, IPC_BUFFER_RW);
+    cmdbuf[2] = (u32)path;
+
+    if (R_SUCCEEDED((res = svcSendSyncRequest(plgLdrHandle))))
+    {
+        res = cmdbuf[1];
+    }
+    return res;
+}
+
+Result  PLGLDR__SetRosalinaMenuBlock(bool shouldBlock)
+{
+    Result res = 0;
+
+    u32 *cmdbuf = getThreadCommandBuffer();
+
+    cmdbuf[0] = IPC_MakeHeader(11, 1, 0);
+    cmdbuf[1] = (u32)shouldBlock;
+
+    if (R_SUCCEEDED((res = svcSendSyncRequest(plgLdrHandle))))
+    {
+        res = cmdbuf[1];
+    }
+    return res;
+}
+
+Result  PLGLDR__SetSwapSettings(const char* swapPath, void* encFunc, void* decFunc, void* args)
+{
+    Result  res = 0;
+
+    u32*    trueArgs;
+    u32*    cmdbuf = getThreadCommandBuffer();
+    u32     buf[0x10] = { 0 };
+
+    const char* trueSwapPath;
+
+    if (swapPath) trueSwapPath = swapPath;
+    else trueSwapPath = "\0";
+
+    if (args) trueArgs = args;
+    else trueArgs = buf;
+
+    cmdbuf[0] = IPC_MakeHeader(12, 2, 4);
+    cmdbuf[1] = (encFunc) ? (svcConvertVAToPA(encFunc, false) | (1 << 31)) : 0;
+    cmdbuf[2] = (decFunc) ? (svcConvertVAToPA(decFunc, false) | (1 << 31)) : 0;
+    cmdbuf[3] = IPC_Desc_Buffer(16 * sizeof(u32), IPC_BUFFER_R);
+    cmdbuf[4] = (u32)trueArgs;
+    cmdbuf[5] = IPC_Desc_Buffer(strlen(trueSwapPath) + 1, IPC_BUFFER_R);
+    cmdbuf[6] = (u32)trueSwapPath;
+
+    if (R_SUCCEEDED((res = svcSendSyncRequest(plgLdrHandle))))
+    {
+        res = cmdbuf[1];
+    }
+
+    return res;
+}
+
+void    PLGLDR__SetEventCallback(OnPlgLdrEventCb_t cb)
+{
+    onPlgLdrEventCb = cb;
+}
+
+static s32      __ldrex__(s32 *addr)
+{
+    s32 val;
+    do
+        val = __ldrex(addr);
+    while (__strex(addr, val));
+
+    return val;
+}
+
+static void     __strex__(s32 *addr, s32 val)
+{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+    s32 v;
+    do
+        v = __ldrex(addr);
+    while (__strex(addr, val));
+#pragma GCC diagnostic pop
+}
+
+void    PLGLDR__Status(void)
+{
+}
+
+s32     PLGLDR__FetchEvent(void)
+{
+    s32  event = __ldrex__(plgEvent); // exclusive read necessary?
+
+    return event;
+}
+
+void    PLGLDR__Reply(s32 event)
+{
+    __strex__(plgReply, PLG_OK);
+
+    if (event < PLG_ABOUT_TO_SWAP)
+    {
+        __strex__(plgEvent, PLG_OK);
+        return;
+    }
+    svcArbitrateAddress(plgLdrArbiter, (u32)plgReply, ARBITRATION_SIGNAL, 1, 0);
+    if (event == PLG_ABOUT_TO_SWAP)
+    {
+        __strex__(plgEvent, PLG_WAIT);
+        svcArbitrateAddress(plgLdrArbiter, (u32)plgEvent, ARBITRATION_WAIT_IF_LESS_THAN, PLG_OK, 0);
+    }
+    else if (event == PLG_ABOUT_TO_EXIT)
+        svcExitThread();
 }
